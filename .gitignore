@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+knowledge/
+.evaluation/
+.DS_Store
+.env
+.env.*
+!.env.example
+/docs/implementation-plan.md
+/docs/hermes-integration-plan.md
+/docs/hermes-comparison.md

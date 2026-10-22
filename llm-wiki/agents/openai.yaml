@@ -1,0 +1,4 @@
+interface:
+  display_name: "LLM Wiki"
+  short_description: "可追溯的 Markdown 知识编译、冲突维护与经验证的经验技能提炼"
+  default_prompt: "使用 $llm-wiki 整理当前项目的知识库，保留来源、有效时间和冲突记录，并验证所有更新。"
