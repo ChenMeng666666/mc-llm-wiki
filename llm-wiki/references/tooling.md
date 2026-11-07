@@ -8,6 +8,8 @@ python3 "$SKILL_ROOT/scripts/wiki.py" --root ./knowledge context --recent 10
 python3 "$SKILL_ROOT/scripts/wiki.py" --root ./knowledge tags --add research database
 python3 "$SKILL_ROOT/scripts/wiki.py" --root ./knowledge add-source /absolute/path/paper.html --title "论文标题" --url https://example.org/paper --published 2026-10-20
 python3 "$SKILL_ROOT/scripts/wiki.py" --root ./knowledge search "概念或实体"
+python3 "$SKILL_ROOT/scripts/wiki.py" --root ./knowledge evidence --claim atlas-production-db-17
+python3 "$SKILL_ROOT/scripts/wiki.py" --root ./knowledge evidence --source <已登记来源ID> --limit 20
 python3 "$SKILL_ROOT/scripts/wiki.py" --root ./knowledge lint
 python3 "$SKILL_ROOT/scripts/wiki.py" --root ./knowledge index
 ```
@@ -21,6 +23,16 @@ tags 不带 --add 是只读查询；带 --add 时受写锁、版本检查与事�
 `add-source` 的 file 必须已经由有权限的工具取得。`--url` 只是来源元数据，不触发抓取。所有字节原样复制到 raw；重复 hash 返回原来源，原始文件已有但损坏时报错。文件很大时要考虑内存，因为此版一次读取完整文件。正文抽取/OCR 由 agent 使用现有工具完成；工具不声称理解 PDF 或图片。
 
 对会话/trace 使用 `--kind session` 或 `--kind trace`；派生摘要使用 `--kind derived --derived-from <已登记来源ID>`，多来源重复传 derived-from。`--scope` 默认为 private，标签不提供 OS 级访问控制。归档前先判断存储位置和派生内容是否适合用户授权的范围。
+
+## 来源血缘审计
+
+`evidence` 为只读操作，必须二选一：`--claim <断言ID>` 或 `--source <来源ID>`。前者返回断言、页面 hash、带 locator 的直接引用、去重的声明根与 unresolved_sources；后者返回派生后代和直接/间接引用它们的 affected_claims。`via` 是受影响的直接引用，`other_roots` 是避开目标来源的路径仍能到达的根。结果只覆盖已登记的 derived_from 和 claims.evidence，不遍历自由正文、supersedes 或 relations，也不进行反事实/语义失效推理。
+
+每个集合使用 `{items,total,truncated}`；`--limit` 默认为 20，允许 1..100，作用于每个集合，total 在截断前计算。截断时提高 limit 或直接读登记表/页面；它不是分页接口，不可把当前 items 当作完整复核清单。命令会扫描全库并校验 raw hash，limit 限制返回项目数，不限制扫描时间、单项文本长度或 token 数。
+
+`lineage_complete` 仅表示引用非空且声明图没有遇到无父项的 derived 来源。`semantic_support` 和 `independence` 始终是 `not_checked`。不同根不代表独立观测，多个共同父项也不表示任选一项即可支持结论。命令不读取 locator 对应的段落内容，不能证明引用蕴含断言。
+
+快照丢失/损坏时仍返回复核清单，同时 `vault_integrity_ok=false`、integrity_errors 给出错误；退出 0 表示报告生成成功。其他结构错误（包括血缘成环、缺父项、坏页面、重复断言）拒绝审计，避免静默漏报。pending 批次沿用 recovery_required。先修复结构，再复查原文；不要用新 hash 掩盖损坏。
 
 ## 批次页面写入
 

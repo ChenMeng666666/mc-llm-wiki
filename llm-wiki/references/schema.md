@@ -37,6 +37,10 @@ knowledge/
 
 `kind` 可为 `document/session/trace/derived`。`derived_from` 指向原始来源 ID，用于来源血缘。论文引用别人的数字不等于独立复现实验；镜像、转述、会话摘要和基于同一论文写出的综合页不能重复计数。网页提取文本可作为另一个快照，关联原始 HTML/PDF；OCR 必须记录页码及不确定性。
 
+`derived_from` 必须是无重复的来源 ID 列表，父来源已登记，整体不得成环。lint/apply 校验声明的图结构；旧的 `derived` 来源没有父项时仍可读取，但报告 `incomplete_lineage`，审计不把它当作已找到的原始根。其他 kind 无父项表示登记图中的终点，并不证明它实际上是独立原始实验；漏填血缘仍需原文复核。
+
+相同字节重新登记时，省略的 kind/scope/derived-from 复用原登记；显式传入且与原登记冲突则返回 `source_metadata_conflict`，不写 URL 别名或任何其他文件。父列表次序不影响比较。新来源未传值仍默认 document/private/[]。title/published_at 保留首次登记值；URL 仍可追加为别名。该策略保留现有内容 ID 模型，不提供同字节多种来源身份，也不自动改写已有血缘。
+
 ## 页面
 
 正文是普通 Markdown，支持 `[[page-id]]` 和相对 Markdown 链接。优先使用稳定、唯一的页面 ID，避免重名简称。下面的 `src-demo` 仅用于展示字段，实际写入时替换成登记表已有的真实来源 ID。

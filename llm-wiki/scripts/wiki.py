@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from lineage import SourceGraph
 from store import WikiError, atomic, digest, encode, journals, json_read, locked, no_pending, now, path_key, read, rollback, safe, transact
 
 TYPES = {'source', 'entity', 'concept', 'synthesis', 'pattern', 'question', 'session'}
@@ -51,15 +52,28 @@ def registry(root):
 
 def add_source(root, args):
     sources = registry(root)
+    SourceGraph(sources)
     data = args.file.read_bytes()
     sha = hashlib.sha256(data).hexdigest()
     sid = 'src-' + sha
-    for parent in args.derived_from:
+    parents = args.derived_from or []
+    for parent in parents:
         if parent not in sources:
             raise WikiError('unknown_source', parent)
     old = read(root, 'state/sources.json')
     if sid in sources:
         entry = sources[sid]
+        # Omitted metadata reuses the original; explicit conflicting provenance must
+        # not silently disappear just because the byte snapshot deduplicates.
+        conflicts = [key for key, value in [('kind', args.kind), ('scope', args.scope)]
+                     if value is not None and value != entry.get(key)]
+        if args.derived_from is not None and set(parents) != set(entry.get('derived_from', [])):
+            conflicts.append('derived_from')
+        if len(set(parents)) != len(parents):
+            raise WikiError('invalid_source_lineage', 'derived_from must be unique source IDs')
+        if conflicts:
+            raise WikiError('source_metadata_conflict', 'Same snapshot has different explicit metadata',
+                            {'id': sid, 'fields': conflicts})
         raw = safe(root, entry['path'])
         if not raw.exists() or hashlib.sha256(raw.read_bytes()).hexdigest() != sha:
             raise WikiError('source_hash_mismatch', 'Existing snapshot was altered; restore it before ingesting')
@@ -72,6 +86,12 @@ def add_source(root, args):
         if not re.fullmatch(r'\.[a-z0-9]{1,10}', ext):
             ext = '.bin'
         path = f'raw/{sha}{ext}'
+        sources[sid] = {'id': sid, 'title': args.title, 'sha256': sha, 'path': path,
+                        'urls': [args.url] if args.url else [], 'retrieved_at': now(),
+                        'published_at': args.published, 'kind': args.kind or 'document',
+                        'scope': args.scope or 'private', 'derived_from': parents}
+        # Validate before creating any persistent snapshot or transaction.
+        SourceGraph(sources)
         raw = safe(root, path)
         if raw.exists():
             if hashlib.sha256(raw.read_bytes()).hexdigest() != sha:
@@ -79,10 +99,6 @@ def add_source(root, args):
         else:
             # Complete the temporary snapshot before making its final hash path visible.
             atomic(raw, data)
-        sources[sid] = {'id': sid, 'title': args.title, 'sha256': sha, 'path': path,
-                        'urls': [args.url] if args.url else [], 'retrieved_at': now(),
-                        'published_at': args.published, 'kind': args.kind,
-                        'scope': args.scope, 'derived_from': args.derived_from}
     tx = transact(root, [{'path': 'state/sources.json', 'expected_sha256': digest(old), 'content': encode(sources)}],
                   'register source ' + sid, operation='source')
     return {'id': sid, 'path': sources[sid]['path'], 'transaction': tx, 'deduplicated': sid in json.loads(old)}
@@ -178,6 +194,13 @@ def inspect(root, overrides=None):
     texts = pages(root, overrides)
     def error(code, path, detail):
         errors.append({'code': code, 'path': path, 'detail': detail})
+    try:
+        graph = SourceGraph(sources)
+        for sid in sorted(graph.unresolved):
+            warnings.append({'code': 'incomplete_lineage', 'path': 'state/sources.json',
+                             'detail': sid + ': derived source has no declared parents'})
+    except WikiError as exc:
+        error(exc.code, 'state/sources.json', str(exc))
     canonical = {}
     for path in texts:
         key = path_key(path)
@@ -191,9 +214,6 @@ def inspect(root, overrides=None):
                 error('missing_source', source['path'], sid)
             elif hashlib.sha256(raw.read_bytes()).hexdigest() != source['sha256']:
                 error('source_hash_mismatch', source['path'], sid)
-            for parent in source.get('derived_from', []):
-                if parent not in sources:
-                    error('unknown_source', source['path'], parent)
         except (KeyError, TypeError, WikiError) as exc:
             error('invalid_source', 'state/sources.json', str(exc))
     ids, claim_ids = {}, {}
@@ -419,6 +439,73 @@ def search(root, args):
             'searched_pages': n, 'note': 'Ranking is not evidence confidence; review source scope and dates'}
 
 
+def evidence(root, args):
+    if not 1 <= args.limit <= 100:
+        raise WikiError('invalid_limit', 'limit must be between 1 and 100')
+    sources = registry(root)
+    graph = SourceGraph(sources)
+    report = inspect(root)
+    # Snapshot damage must remain inspectable for impact review. Malformed pages
+    # cannot be skipped silently, since doing so would omit affected claims.
+    integrity = [e for e in report['errors'] if e['code'] in {'missing_source', 'source_hash_mismatch'}]
+    if len(integrity) != len(report['errors']):
+        raise WikiError('validation_failed', 'Repair structural errors before tracing evidence', report)
+
+    def bounded(items):
+        return {'items': items[:args.limit], 'total': len(items), 'truncated': len(items) > args.limit}
+
+    def descriptor(sid):
+        source = sources[sid]
+        return {'id': sid, **{key: source.get(key) for key in ('title', 'path', 'sha256', 'kind', 'scope', 'urls')}}
+
+    def claim_info(path, claim):
+        return {**{key: claim.get(key) for key in ('id', 'text', 'status', 'scope', 'valid_from', 'valid_to')},
+                'path': path, 'page_sha256': digest(read(root, path))}
+
+    claims = [(path, claim) for path, meta in report['metadata'].items() for claim in meta['claims']]
+    result = {'semantic_support': 'not_checked', 'independence': 'not_checked',
+              'vault_integrity_ok': not integrity, 'integrity_errors': bounded(integrity),
+              'note': 'Declared ancestry only. Read original evidence; roots are not independent confirmations. '
+                      'Affected claims require review, not automatic invalidation.'}
+    if args.claim is not None:
+        matches = [(path, c) for path, c in claims if c['id'] == args.claim]
+        if not matches:
+            raise WikiError('unknown_claim', args.claim)
+        path, claim = matches[0]
+        citations = claim.get('evidence', [])
+        roots, unresolved = set(), set()
+        for citation in citations:
+            found, gaps = graph.roots(citation['source'])
+            roots.update(found)
+            unresolved.update(gaps)
+        result.update({'claim': claim_info(path, claim), 'citations': bounded(citations),
+                       'citation_count': len(citations),
+                       'roots': bounded([descriptor(sid) for sid in sorted(roots)]),
+                       'unresolved_sources': bounded(sorted(unresolved)),
+                       'lineage_complete': bool(citations) and not unresolved})
+    else:
+        sid = args.source
+        descendants = graph.descendants(sid)
+        affected = []
+        for path, claim in claims:
+            cited = {item['source'] for item in claim.get('evidence', [])}
+            via = cited & (descendants | {sid})
+            if via:
+                other_roots, unresolved = set(), set()
+                for item in cited:
+                    roots, gaps = graph.roots(item, exclude={sid})
+                    other_roots.update(roots)
+                    unresolved.update(gaps)
+                # A surviving path is a review aid. Multiple parents may all be
+                # required; reachability cannot establish independent support.
+                affected.append({**claim_info(path, claim), 'via': bounded(sorted(via)),
+                                 'other_roots': bounded(sorted(other_roots)),
+                                 'unresolved_sources': bounded(sorted(unresolved))})
+        result.update({'source': descriptor(sid), 'descendants': bounded(sorted(descendants)),
+                       'affected_claims': bounded(sorted(affected, key=lambda c: (c['path'], c['id'])))})
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=os.environ.get('WIKI_PATH') or None,
@@ -436,14 +523,19 @@ def main():
     add.add_argument('--title', required=True)
     add.add_argument('--url')
     add.add_argument('--published')
-    add.add_argument('--kind', choices=['document', 'session', 'trace', 'derived'], default='document')
-    add.add_argument('--scope', default='private')
-    add.add_argument('--derived-from', action='append', default=[])
+    add.add_argument('--kind', choices=['document', 'session', 'trace', 'derived'])
+    add.add_argument('--scope')
+    add.add_argument('--derived-from', action='append')
     ap = subs.add_parser('apply', help='Apply a version-checked UTF-8 page manifest')
     ap.add_argument('manifest', type=Path)
     se = subs.add_parser('search')
     se.add_argument('query')
     se.add_argument('--limit', type=int, default=8)
+    ev = subs.add_parser('evidence', help='Trace declared source roots or source-change impact; read-only')
+    target = ev.add_mutually_exclusive_group(required=True)
+    target.add_argument('--claim', help='Claim ID to trace to source roots')
+    target.add_argument('--source', help='Source ID whose descendants and citing claims need review')
+    ev.add_argument('--limit', type=int, default=20, help='Maximum items per output collection (1..100)')
     args = parser.parse_args()
     if args.root is None:
         parser.error('provide --root or set WIKI_PATH')
@@ -464,6 +556,8 @@ def main():
                     result = context(root, args)
                 elif args.op == 'tags':
                     result = tags(root, args)
+                elif args.op == 'evidence':
+                    result = evidence(root, args)
                 elif args.op == 'search':
                     if not 1 <= args.limit <= 100:
                         raise WikiError('invalid_limit', 'limit must be between 1 and 100')
