@@ -1,5 +1,9 @@
-"""Cooperative local locking and recoverable UTF-8 file batches (macOS/Linux)."""
-import fcntl
+"""Cooperative local locking and recoverable UTF-8 file batches (macOS/Linux/Windows)."""
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl; use msvcrt byte-range locking instead
+    fcntl = None
+    import msvcrt
 import hashlib
 import json
 import os
@@ -74,7 +78,10 @@ def atomic(path, content):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(name, path)
-        folder = os.open(path.parent, os.O_RDONLY)
+        try:
+            folder = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            return  # Windows cannot open a directory for fsync; os.replace is durable enough
         try:
             os.fsync(folder)
         finally:
@@ -84,6 +91,28 @@ def atomic(path, content):
             os.unlink(name)
 
 
+def _flock(stream, write):
+    """Non-blocking lock; raises BlockingIOError when another holder exists."""
+    if fcntl is not None:
+        fcntl.flock(stream.fileno(), (fcntl.LOCK_EX if write else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        return
+    stream.seek(0)
+    try:
+        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        raise BlockingIOError('lock held') from None
+
+
+def _funlock(stream):
+    if fcntl is not None:
+        return  # fcntl.flock releases on close; msvcrt needs an explicit unlock
+    stream.seek(0)
+    try:
+        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+
+
 @contextmanager
 def locked(root, write=False):
     path = safe(root, 'state/lock')
@@ -91,10 +120,13 @@ def locked(root, write=False):
         raise WikiError('not_initialized', 'Run init first')
     with path.open('r+') as stream:
         try:
-            fcntl.flock(stream, (fcntl.LOCK_EX if write else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+            _flock(stream, write)
         except BlockingIOError:
             raise WikiError('busy', 'Another local operation holds the wiki lock') from None
-        yield
+        try:
+            yield
+        finally:
+            _funlock(stream)
 
 
 def journals(root):

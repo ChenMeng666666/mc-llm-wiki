@@ -1,6 +1,6 @@
 # 本地工具
 
-需要 Python 3.10+ 和 macOS/Linux（使用标准库 fcntl）。无第三方运行依赖、模型密钥、网络请求或动态技能代码加载。把下文 `SKILL_ROOT` 理解为本次加载的 skill 目录；不要依赖用户的固定绝对路径。
+需要 Python 3.10+，支持 macOS/Linux/Windows（POSIX 用标准库 fcntl，Windows 回退到 msvcrt 字节范围锁）。无第三方运行依赖、模型密钥、网络请求或动态技能代码加载。把下文 `SKILL_ROOT` 理解为本次加载的 skill 目录；不要依赖用户的固定绝对路径。Windows 宿主把示例里的 `python3` 换成 `python`（或 `py -3`）。
 
 ```bash
 python3 "$SKILL_ROOT/scripts/wiki.py" --root ./knowledge init

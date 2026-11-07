@@ -10,13 +10,20 @@
 
 ## 使用
 
-工具需 Python 3.10+、macOS/Linux。克隆仓库，将技能链接到全局共享目录：
+工具需 Python 3.10+，支持 macOS/Linux/Windows。克隆仓库，将技能链接到全局共享目录：
 
 ```bash
 git clone git@github.com:ChenMeng666666/mc-llm-wiki.git
 cd mc-llm-wiki
 mkdir -p ~/.agents/skills
 ln -s "$PWD/llm-wiki" ~/.agents/skills/llm-wiki
+```
+
+Windows 没有可用的 `ln -s` 时，用目录 junction 等价实现（无需管理员权限，在仓库目录内执行）：
+
+```bat
+mkdir "%USERPROFILE%\.agents\skills" 2>nul
+mklink /J "%USERPROFILE%\.agents\skills\llm-wiki" "%cd%\llm-wiki"
 ```
 
 支持 `~/.agents/skills` 的 Agent 可从全局目录发现它。其他宿主可以把自己的技能入口链接到同一份源码，例如：

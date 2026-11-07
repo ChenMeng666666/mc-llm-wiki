@@ -7,6 +7,8 @@ description: Use when building or maintaining a persistent Markdown knowledge ba
 
 Compile sources into an inspectable, evolving wiki. Keep source evidence, interpreted knowledge, and reusable procedures distinct. Match the user's language.
 
+> Windows host: run the scripts with `python` (or `py -3`) instead of `python3`. Locking falls back to `msvcrt` byte-range locks, so the CLI works on Windows too.
+
 ## Start
 
 Identify the requested operation and knowledge root. Honor existing repository instructions and wiki conventions. An explicit user root takes precedence, then `WIKI_PATH`, then an existing project wiki, otherwise `knowledge/`. Never initialize over a different knowledge system or migrate it silently. For an established vault, adapt these workflows to its format; the bundled CLI manages only its own JSON-frontmatter format.
