@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "date": "2026-11-04",
+  "timezone": "Asia/Shanghai",
+  "purpose": "Decide whether the installed DSH needs a memory plugin, using local traces and bounded execution probes.",
+  "frozen_before_probe_implementation": true,
+  "evidence_levels": ["documented", "code_observed", "executed", "benefit_measured"],
+  "real_history": {
+    "selection": "All discovered root DSH sessions under ~/.dsh/sessions, excluding credentials and unrelated IM conversations.",
+    "required_for_cross_session_claim": "A fact established in an earlier session, a later task requiring it, and an independently verifiable outcome.",
+    "temporal_split": "Earlier sessions for diagnosis; later unopened sessions for evaluation. If no later session exists, report unavailable; synthetic fixtures are not a held-out user evaluation."
+  },
+  "budget": {"model_calls": 0, "api_spend": 0, "new_services": 0, "live_profile_mutations": 0},
+  "baselines": ["no_memory", "plain_workspace_file", "one_existing_dsh_plugin"],
+  "probe_cases": [
+    {"id": "current_state", "oracle": "Current desktop profile is read from the fixture environment; remembered web profile cannot override it."},
+    {"id": "durable_fact", "oracle": "An earlier workspace fact is available to a later session of the same workspace."},
+    {"id": "irrelevant", "oracle": "Unrelated stored facts do not enter the bounded prompt context."},
+    {"id": "scope", "oracle": "Facts from workspace A are not returned or injected in workspace B."},
+    {"id": "correction", "oracle": "A correction has a single identifiable current value; the earlier value remains traceable or is explicitly removed."},
+    {"id": "delete", "oracle": "A deleted fact cannot be recovered through normal recall or subsequent prompt rebuild."},
+    {"id": "budget", "oracle": "Prompt output respects the configured bound; relevant older facts are checked separately from recent facts."},
+    {"id": "duplicate", "oracle": "Replaying the same write event does not create duplicate durable memory."},
+    {"id": "concurrency", "oracle": "Concurrent independent writes do not lose accepted facts."},
+    {"id": "interruption_retry", "oracle": "An interrupted write is distinguishable from a committed one; retry does not corrupt or duplicate accepted facts."},
+    {"id": "lifecycle", "oracle": "The installed system-prompt hook adds context to a subsequent request and stops doing so after plugin disposal."}
+  ],
+  "ablations": ["scope_filter_off", "relevance_filter_off", "current_state_read_off"],
+  "measurement": {
+    "deterministic": ["required_evidence_presence", "unrelated_context_presence", "cross_scope_leak", "deleted_fact_presence", "prompt_characters", "wall_ms"],
+    "unavailable_without_model_evaluation": ["answer_citation_support", "final_task_success", "model_adoption", "model_latency", "actual_token_usage", "api_cost_benefit"],
+    "reporting": "Never equate a retrieval hit with a correct answer, synthetic fixture success with real user benefit, or zero model calls with measured model efficiency."
+  },
+  "decision_rules": [
+    "Do not build a new memory backend without a reproduced cross-session failure unmet by a simple file or compatible existing plugin.",
+    "A candidate with workspace leakage, deleted-memory recall, or live-state override cannot be enabled on those tests.",
+    "Prefer a thin adapter only if a current-version integration or evidence-contract gap is reproduced.",
+    "No held-out user tasks means no claim of validated real-world benefit."
+  ]
+}
